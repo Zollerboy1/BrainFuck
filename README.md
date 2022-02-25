@@ -14,8 +14,18 @@ For this to work, you will need to have cmake installed on your system.
 After you have built the compiler, you can run it like so:
 
 ```bash
-./build/bin/BrainFuck path/to/brainfuck/file.bf
+$ ./build/bin/BrainFuck path/to/brainfuck/file.bf
 ```
 
 This will then compile the BrainFuck code to an executable which you can find in the folder
 of the file you gave as the input.
+
+## Example
+
+You can try out the 'Hello World!' example in the `examples` folder:
+
+```bash
+$ ./build/bin/BrainFuck ./examples/HelloWorld.bf
+$ ./examples/HelloWorld
+Hello World!
+```
