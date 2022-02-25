@@ -2,6 +2,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -481,6 +482,82 @@ static llvm::Error generateIR(std::vector<Instruction>::iterator loopStart = ins
     return loopBlock ? llvm::make_error<ParseError>(ParseError::Kind::noLoopEnd) : llvm::Error::success();
 }
 
+
+llvm::Optional<std::string> getSDKPath() {
+    llvm::SmallString<128> tempFilePath;
+    if (auto error = llvm::sys::fs::createTemporaryFile("sdkpath", "", tempFilePath)) {
+        llvm::errs() << "Could not create temporary file: " << error.message();
+        return llvm::None;
+    }
+
+
+    auto xcrunPath = llvm::sys::findProgramByName("xcrun");
+    if (std::error_code errorCode = xcrunPath.getError()) {
+        llvm::errs() << "Could not find xcrun: " << errorCode.message();
+        return llvm::None;
+    }
+
+    llvm::StringRef xcrunArgs[] = {
+        *xcrunPath,
+        "--sdk",
+        "macosx",
+        "--show-sdk-path"
+    };
+
+    int xcrunReturn = llvm::sys::ExecuteAndWait(*xcrunPath, xcrunArgs, llvm::None, {llvm::None, {tempFilePath}, llvm::None});
+    if (xcrunReturn) {
+        llvm::errs() << "xcrun command failed.";
+        return llvm::None;
+    }
+
+
+    std::ifstream tempFile((std::string)tempFilePath);
+    std::stringstream buffer;
+
+    char c;
+    while (tempFile.get(c) && c != '\n')
+        buffer << c;
+
+    return buffer.str();
+}
+
+
+int link(llvm::StringRef tempFilePath, llvm::StringRef outputFilePath) {
+    auto sdkPath = getSDKPath();
+    if (!sdkPath) {
+        llvm::errs() << "Could not find path of MacOSK.sdk";
+        return 1;
+    }
+
+
+    auto ldPath = llvm::sys::findProgramByName("ld");
+    if (std::error_code errorCode = ldPath.getError()) {
+        llvm::errs() << "Could not find ld: " << errorCode.message();
+        return 1;
+    }
+
+    llvm::StringRef ldArgs[] = {
+        *ldPath,
+        "-syslibroot",
+        sdkPath.getValue(),
+        "-lSystem",
+        tempFilePath,
+        "-o",
+        outputFilePath
+    };
+
+    int ldReturn = llvm::sys::ExecuteAndWait(*ldPath, ldArgs);
+    if (ldReturn) {
+        llvm::errs() << "ld command failed.";
+        return 1;
+    }
+
+    llvm::outs() << "Generated " << outputFilePath << "\n";
+
+    return 0;
+}
+
+
 int main(int argc, const char ** argv) {
     llvm::cl::HideUnrelatedOptions(compilerCategory);
 
@@ -663,29 +740,5 @@ int main(int argc, const char ** argv) {
     }
 
 
-    auto ldPath = llvm::sys::findProgramByName("ld");
-    if (std::error_code errorCode = ldPath.getError()) {
-        llvm::errs() << "Could not find ld: " << errorCode.message();
-        return 1;
-    }
-
-    llvm::StringRef ldArgs[] = {
-        *ldPath,
-        "-syslibroot",
-        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
-        "-lSystem",
-        tempFilePath,
-        "-o",
-        outputFilePath
-    };
-
-    int ldReturn = llvm::sys::ExecuteAndWait(*ldPath, ldArgs);
-    if (ldReturn) {
-        llvm::errs() << "ld command failed.";
-        return 1;
-    }
-
-    llvm::outs() << "Generated " << outputFilePath << "\n";
-
-    return 0;
+    return link(tempFilePath, outputFilePath);
 }
