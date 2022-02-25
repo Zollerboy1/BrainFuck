@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import sys
@@ -29,43 +30,51 @@ def job_count() -> int:
 
 
 def cmake(source_dir: str, install_dir: str, cwd: str) -> bool:
-    cmake_process = subprocess.Popen(['cmake', source_dir, '-G', 'Unix Makefiles',
-                                      '-D', 'CMAKE_INSTALL_PREFIX=' + install_dir,
-                                      '-D', 'CMAKE_BUILD_TYPE=' + args.build_type],
-                                     stdout=subprocess.PIPE, cwd=cwd,
-                                     universal_newlines=True)
+    with subprocess.Popen(['cmake', source_dir, '-G', 'Unix Makefiles',
+                           '-D', 'CMAKE_INSTALL_PREFIX=' + install_dir,
+                           '-D', 'CMAKE_BUILD_TYPE=' + args.build_type],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          cwd=cwd, encoding='utf-8') as cmake_process:
+        while True:
+            print(cmake_process.stdout.readline().strip())
 
-    while True:
-        output: str = cmake_process.stdout.readline().strip()
-        if output is not None:
-            print(output)
-        returncode = cmake_process.poll()
+            returncode = cmake_process.poll()
 
-        if returncode is not None:
-            return returncode == 0
+            if returncode is not None:
+                print('')
+                return returncode == 0
 
 
 def make_and_install(cwd: str) -> bool:
-    make_process = subprocess.Popen(['make', '-j', str(job_count()), 'install'],
-                                    stdout=subprocess.PIPE, cwd=cwd,
-                                    universal_newlines=True)
+    with subprocess.Popen(['make', '-j', '{}'.format(job_count()), 'install'],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          cwd=cwd, encoding='utf-8') as make_process:
+        sel = selectors.DefaultSelector()
+        sel.register(make_process.stdout, selectors.EVENT_READ)
+        sel.register(make_process.stderr, selectors.EVENT_READ)
 
-    while True:
-        output = make_process.stdout.readline().strip()
-        match = re.match(r'^\[\s*(\d+)%]', output)
+        while True:
+            for key, _ in sel.select():
+                if key.fileobj is make_process.stdout:
+                    output = key.fileobj.readline().strip()
+                    match = re.match(r'^\[\s*(\d+)%]', output)
+                    if match is not None:
+                        progress = match.group(1)
+                        print('\rProgress: ' + progress, end='%', flush=True)
+                else:
+                    output = key.fileobj.readline().strip()
+                    if output != '':
+                        print(output, flush=True)
 
-        if match is not None:
-            progress = match.group(1)
-            print('\rProgress: ' + progress, end='%')
-        elif output is not None:
-            print(output)
+            returncode = make_process.poll()
 
-        returncode = make_process.poll()
+            if returncode is not None:
+                print('\n')
 
-        if returncode is not None:
-            print('')
-            print('Done!\n')
-            return returncode == 0
+                if returncode == 0:
+                    print('Done!\n')
+                    return True
+                return False
 
 
 parser = argparse.ArgumentParser(prog='BrainFuck build script',
